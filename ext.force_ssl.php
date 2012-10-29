@@ -10,89 +10,122 @@
  * @link		https://www.epicvoyage.org/ee/force-ssl/
  */
 
+require_once(dirname(__FILE__).'/forcessl_shared.class.php');
 class Force_ssl_ext {
-	var $name = 'Force SSL';
-	var $version = '1.1';
-	var $descriptions = 'Force HTTPS (HTTP + SSL) connections at your preference.';
+	var $name;
+	var $version;
+	var $description;
+	var $docs_url;
+
 	var $settings_exist = 'y';
-	var $docs_url = 'https://www.epicvoyage.org/ee/force-ssl';
 	var $settings = array(
 		'ssl_on' => 'none', // 'none', 'login', 'logged_in', 'cp', 'all', 'hsts'
 		'port' => 443,
 		'active' => -1,
-		'license' => ''
+		'tamper' => 'abs', // 'none', 'auto', 'abs'
+		'deny_post' => 0,
+		'license' => '',
+		'backup' => array(
+			'theme_folder_url' => '',
+			'site_url' => '',
+			'cp_url' => ''
+		)
 	);
 
 	function __construct($settings = '') {
-		$this->EE =& get_instance();
+		$this->name = forcessl_shared::$name;
+		$this->version = forcessl_shared::$version;
+		$this->description = forcessl_shared::$description;
+		$this->docs_url = forcessl_shared::$home;
 
-		if (is_array($settings)) {
-			foreach ($settings as $k => $v) {
-				$this->settings[$k] = $v;
-			}
-		}
+		$this->EE =& get_instance();
+		$this->_merge_settings($settings);
 	}
 
 	function Force_ssl_ext($settings = '') {
 		$this->__construct($settings);
 	}
 	
-	private function _backtrace() {
-		$trace = debug_backtrace();
-		$ret = '';
-
-		# Hide this function call
-		array_shift($trace);
-		$skip = array('line', 'function', 'file');
-
-		# Hide or encode function parameters
-		foreach ($trace as $index => $t) {
-			# Shorten the filename (no more directory disclosure than necessary)
-			if (isset($t['file']) && isset($_SERVER['DOCUMENT_ROOT'])) {
-				$t['file'] = str_replace($_SERVER['DOCUMENT_ROOT'], '', $t['file']);
-			}
-
-			$ret = '['.($index).'] '.
-				(isset($t['file']) ? $t['file'].':' : '').
-				(isset($t['line']) ? $t['line'].': ' : '').
-				$t['function'].'<br />'.$ret;
-		}
-
-		return $ret;
-	}
-
 	/**
 	 * Start working after the session has been initialized.
 	 */
 	public function on_page_load(&$sess) {
 		# Do not do anything unless someone has been through the settings page.
-		if (intval($this->settings['active']) != 1) {
+		if (forcessl_shared::disabled()) {
+			# Allow us to de-activate any/all CP URL modifications when
+			# the disabled config item is turned on.
+			if ($this->EE->config->item('force_ssl_disabled')) {
+				foreach ($this->settings['backup'] as $k => $v) {
+					if (!empty($v)) {
+						$this->_update_site_prefs();
+						break;
+					}
+				}
+			}
+
 			return true;
+		}
+
+		# When new URLs are entered by an admin, we need to update them.
+		$cp = defined('REQ') && (constant('REQ') === 'CP');
+
+		if ($cp && ($_SERVER['REQUEST_METHOD'] == 'POST') && isset($_GET['C']) && ($_GET['C'] == 'admin_system')) {
+			if (isset($_POST['site_url']) && isset($_POST['cp_url']) && isset($_POST['theme_folder_url'])) {
+				if ($this->_has_perms($sess->userdata['group_id'], 'can_access_cp', 'can_access_sys_prefs')) {
+					# Read $_POST into the config so we can work with it cleanly.
+					$this->EE->config->set_item('site_url', $_POST['site_url']);
+					$this->EE->config->set_item('cp_url', $_POST['cp_url']);
+					$this->EE->config->set_item('theme_folder_url', $_POST['theme_folder_url']);
+
+					# Update config. If any changes were made, copy them to $_POST.
+					if ($this->_update_site_prefs()) {
+						$_POST['site_url'] = $this->EE->config->item('site_url');
+						$_POST['cp_url'] = $this->EE->config->item('cp_url');
+						$_POST['theme_folder_url'] = $this->EE->config->item('theme_folder_url');
+					}
+				}
+			}
 		}
 
 		# If we are still here, start to examine our encryption status.
 		$hsts = (($this->settings['ssl_on'] == 'hsts') && ($this->settings['port'] == 443));
-		$encrypted = $this->_is_ssl();
 
-		# Is HSTS mode enabled? Yay!
-		if ($hsts && $encrypted) {
-			# Proposed web security mechanism (June 17, 2010 - "HTTP Strict
-			# Transport Security"). Requests browsers to use HTTPS for the
-			# next 7 days (0x31337 -> Octal as Decimal). Requires a valid
-			# security certificate to work.
-			header('Strict-Transport-Security: max-age=611467');
-
-		# If this connection is unencrypted, move whatever is allowed over to HTTPS.
-		} elseif (!$encrypted) {
-			$encrypt = $hsts || ($this->settings['ssl_on'] == 'all');
-			if ($this->settings['ssl_on'] == 'logged_in') {
-				$encrypt = (isset($sess->userdata['member_id']) && $sess->userdata['member_id']);
-			} elseif ($this->settings['ssl_on'] == 'cp') {
-				$encrypt = defined('REQ') && (constant('REQ') === 'CP');
+		# Is the connection encrypted?
+		if (forcessl_shared::is_ssl()) {
+			# Is HSTS mode enabled? Yay!
+			if ($hsts) {
+				# Proposed web security mechanism (June 17, 2010 - "HTTP Strict
+				# Transport Security"). Requests browsers to use HTTPS for the
+				# next 7 days (0x31337 -> Octal as Decimal). Requires a valid
+				# security certificate to work.
+				header('Strict-Transport-Security: max-age=611467');
 			}
 
+		# If this connection is unencrypted, move whatever is allowed over to HTTPS.
+		} else {
+			# Do we allow <form> POSTs?
+			if ($this->settings['deny_post'] && ($_SERVER['REQUEST_METHOD'] == 'POST')) {
+				# EE->output->show_message wants EE->session to exist.
+				$this->EE->session =& $sess;
+				$this->_reject();
+				return false;
+			}
+
+			# If we should encrypt all pages...
+			$encrypt = $hsts || ($this->settings['ssl_on'] == 'all');
+
+			# Or if we are logged in and require such users to use SSL...
+			if ($this->settings['ssl_on'] == 'logged_in') {
+				$encrypt = isset($sess->userdata['member_id']) && $sess->userdata['member_id'];
+
+			# Or if this is a CP page...
+			} elseif ($this->settings['ssl_on'] == 'cp') {
+				$encrypt = $cp;
+			}
+
+			# Then go SSL!
 			if ($encrypt) {
-				$this->EE->functions->redirect($this->_ssl_url());
+				$this->EE->functions->redirect(forcessl_shared::ssl_url());
 			}
 		}
 
@@ -100,65 +133,188 @@ class Force_ssl_ext {
 	}
 
 	/**
+	 * Checks if the user's group has certain permissions.
+	 *
+	 * @param $group_id
+	 * @param $permission1
+	 * @param $permission2
+	 * @param ...
+	 */
+	private function _has_perms() {
+		$args = func_get_args();
+		$group = array_shift($args);
+		$ret = false;
+
+		$this->EE->db->select('group_id');
+		$this->EE->db->from('member_groups');
+		$this->EE->db->where('group_id', $group);
+		foreach ($args as $v) {
+			$this->EE->db->where($v, 'y');
+		}
+
+		return $this->EE->db->get()->num_rows();
+	}
+
+	/**
 	 * Modify forms as needed.
 	 */
 	public function form_declaration($data) {
-		# Do not do anything unless someone has been through the settings page.
-		if ((intval($this->settings['active']) != 1) || ($this->settings['ssl_on'] == 'none')) {
-			return $data;
-		}
+		if ($this->_modify_form()) {
+			# Redirect form targets on this site to SSL.
+			if ($data['action'] == '') {
+				$data['action'] = forcessl_shared::make_ssl_url($this->EE->functions->fetch_site_index());
+			}
 
-		# Allow template designers to opt a form out of our plugin with '{exp:form:tag ... force_ssl="no"}'
-		if (isset($data['force_ssl']) && !empty($data['force_ssl']) && ($data['force_ssl'] != 'yes')) {
-			return $data;
-		}
-
-		# Redirect form targets on this site to SSL.
-		if ($data['action'] == '') {
-			$data['action'] = $this->_make_ssl_url($this->EE->functions->fetch_site_index());
-		}
-
-		# If SSL is only on for forms, return the user to a non-SSL connection now.
-		if (($this->settings['ssl_on'] == 'login') && isset($data['hidden_fields']) && isset($data['hidden_fields']['RET'])) {
-			$data['hidden_fields']['RET'] = $this->_make_normal_url($data['hidden_fields']['RET']);
+			# If SSL is only on for forms, return the user to a non-SSL connection now.
+			if (($this->settings['ssl_on'] == 'login') && isset($data['hidden_fields']) && isset($data['hidden_fields']['RET'])) {
+				$data['hidden_fields']['RET'] = forcessl_shared::make_normal_url($data['hidden_fields']['RET']);
+			}
 		}
 
 		return $data;
 	}
 
 	/**
-	 * Detect if we are already using SSL.
+	 * We have less control over Freeform, but that is alright.
 	 */
-	private function _is_ssl() {
-		$ret = false;
+	public function freeform_declaration($data) {
+		if ($this->_modify_form()) {
+			$data = str_replace('http://', 'https://', $data);
+		}
 
-		# The "Standard" PHP way...
-		if (isset($_SERVER['HTTPS']) && !empty($_SERVER['HTTPS']) && ($_SERVER['HTTPS'] !== 'off')) {
-			$ret = true;
-		# If mod_ssl is not present, we have to rely on port numbers to know if we are encrypted or not.
-		} elseif (isset($_SERVER['SERVER_PORT']) && (intval($_SERVER['SERVER_PORT']) == intval($this->settings['port']))) {
-			$ret = true;
+		return $data;
+	}
+
+	private function _modify_form() {
+		$ret = true;
+
+		# Do not do anything unless someone has been through the settings page.
+		if (forcessl_shared::disabled() || ($this->settings['ssl_on'] == 'none')) {
+			$ret = false;
+		}
+
+		# Allow template designers to opt a form out of our plugin with '{exp:form:tag ... force_ssl="no"}'
+		if (isset($data['force_ssl']) && !empty($data['force_ssl']) && ($data['force_ssl'] != 'yes')) {
+			$ret = false;
 		}
 
 		return $ret;
 	}
 
 	/**
-	 * Detect the current URL and modify it to use HTTPS.
+	 * Let the user see what they have entered for their CP and Theme Folder URLs (even when we have
+	 * overridden them).
 	 */
-	private function _ssl_url() {
-		# CodeIgniter provides a way to retrieve the current URL.
-		$this->EE->load->helper('url');
-		$ret = $base = $this->_make_ssl_url(current_url());
+	public function cp_orig_config() {
+		$ret = '';
 
-		# HTTP_HOST + REQUEST_URI is more accurate.
-		if (isset($_SERVER['HTTP_HOST']) && isset($_SERVER['REQUEST_URI'])) {
-			$port = intval($this->settings['port']) == 443 ? '' : ':'.intval($this->settings['port']);
-			$ret = $php = 'https://'.$_SERVER['HTTP_HOST'].$port.$_SERVER['REQUEST_URI'];
+		foreach ($this->settings['backup'] as $k => $v) {
+			if (!empty($v)) {
+				$ret .= 'if (force_ssl_elem = document.getElementById("'.$k.'")) { if (window.console) { console.log(\''.addslashes($k).': Force SSL extension overrides "'.addslashes($v).'" with "\'+force_ssl_elem.value+\'"\'); } force_ssl_elem.value = "'.addslashes($v).'"; }';
+			}
+		}
 
-			# ... but if it significantly differs, follow CI.
-			if (strncmp($base, $php, strlen($base)) != 0) {
-				$ret = $base;
+		return $ret;
+	}
+
+	private function _update_site_prefs() {
+		$ret = false;
+		$new = array();
+
+		if (($this->settings['ssl_on'] != 'none') && !forcessl_shared::disabled() && ($this->settings['tamper'] != 'none')) {
+			#######################################
+			# Keep track of the "site_url" setting.
+			$url = $site_url = $this->EE->config->item('site_url');
+			if (in_array($this->settings['ssl_on'], array('all', 'hsts'))) {
+				$url = forcessl_shared::make_ssl_url($site_url);
+
+				if ($url != $site_url) {
+					$new['site_url'] = $url;
+					$this->settings['backup']['site_url'] = $site_url;
+				}
+			} elseif (!empty($this->settings['backup']['site_url'])) {
+				$new['site_url'] = $this->settings['backup']['site_url'];
+				$this->settings['backup']['site_url'] = '';
+			}
+
+			#####################################
+			# Keep track of the "cp_url" setting.
+			$url = $cp_url = $this->EE->config->item('cp_url');
+			$skip = false;
+
+			# If the CP is over SSL, upgrade its URL.
+			if (in_array($this->settings['ssl_on'], array('logged_in', 'cp', 'all', 'hsts'))) {
+				$url = forcessl_shared::make_ssl_url($cp_url);
+
+			# For login-only SSL, the URL needs to work both ways.
+			} elseif ($this->settings['ssl_on'] == 'login') {
+				if ($this->settings['tamper'] == 'auto') {
+					$url = forcessl_shared::make_agnostic_url($cp_url);
+				} else {
+					$url = forcessl_shared::make_ssl_url($cp_url);
+				}
+
+			# Otherwise, revert any changes to the CP URL.
+			} elseif (!empty($this->settings['backup']['cp_url'])) {
+				$new['cp_url'] = $this->settings['backup']['cp_url'];
+				$this->settings['backup']['cp_url'] = '';
+				$skip = true;
+			}
+
+			$outdated = !empty($this->settings['backup']['cp_url']) && ($url != $this->settings['backup']['cp_url']);
+
+			if (!$skip && (($url != $cp_url) || $outdated)) {
+				$this->settings['backup']['cp_url'] = $cp_url;
+				$new['cp_url'] = $url;
+			}
+
+			###############################################
+			# Keep track of the "theme_folder_url" setting.
+			$theme_folder_url = $this->EE->config->item('theme_folder_url');
+			if ($this->settings['ssl_on'] != 'none') {
+				if (($this->settings['tamper'] == 'auto') && !in_array($this->settings['ssl_on'], array('all', 'hsts'))) {
+					$url = forcessl_shared::make_agnostic_url($theme_folder_url);
+				} else {
+					$url = forcessl_shared::make_ssl_url($theme_folder_url);
+				}
+
+				$outdated = !empty($this->settings['backup']['theme_folder_url']) && ($url != $this->settings['backup']['theme_folder_url']);
+
+				if (($url != $theme_folder_url) || $outdated) {
+					$this->settings['backup']['theme_folder_url'] = $theme_folder_url;
+					$new['theme_folder_url'] = $url;
+				}
+			} elseif (!empty($this->settings['theme_folder_url'])) {
+				$new['theme_folder_url'] = $this->settings['backup']['theme_folder_url'];
+				$this->settings['backup']['theme_folder_url'] = '';
+			}
+		} else {
+			if (!empty($this->settings['backup']['site_url'])) {
+				$new['site_url'] = $this->settings['backup']['site_url'];
+				$this->settings['backup']['site_url'] = '';
+			}
+			if (!empty($this->settings['backup']['cp_url'])) {
+				$new['cp_url'] = $this->settings['backup']['cp_url'];
+				$this->settings['backup']['cp_url'] = '';
+			}
+			if (!empty($this->settings['backup']['theme_folder_url'])) {
+				$new['theme_folder_url'] = $this->settings['backup']['theme_folder_url'];
+				$this->settings['backup']['theme_folder_url'] = '';
+			}
+		}
+
+		# If there was anything to update...
+		if (!empty($new)) {
+			$ret = true;
+			$this->_save_settings();
+
+			# Stash the changes. EE claims this function should not be accessed by us, but it is used in several
+			# other places. So long as we track changes to it... =)
+			$this->EE->config->update_site_prefs($new);
+
+			# Update the settings for this page load (may not be perfect; should we redirect?).
+			foreach ($new as $k => $v) {
+				$this->EE->config->set_item($k, $v);
 			}
 		}
 
@@ -166,37 +322,24 @@ class Force_ssl_ext {
 	}
 
 	/**
-	 * Shift a URL over to SSL
+	 * This function is called when we wish to prohibit an action (such as sending POST
+	 * data to a non-SSL URL). It requests that EE abort whatever it is doing.
 	 */
-	private function _make_ssl_url($url) {
-		$port = intval($this->settings['port']) == 443 ? '' : ':'.intval($this->settings['port']);
-		return preg_replace('#^https?://([^/:]+)(?::[^/]+)?/#i', 'https://$1'.$port.'/', $this->_abs_url($url));
-	}
+	private function _reject() {
+		$this->EE->lang->loadfile('core');
+		$this->EE->lang->loadfile('design');
+		$this->EE->lang->loadfile('force_ssl');
 
-	/**
-	 * Unshift a URL from SSL
-	 */
-	private function _make_normal_url($url) {
-		return preg_replace('#^https?://([^/:]+)(?::[^/]+)?/#i', 'http://$1/', $this->_abs_url($url));
-	}
+		$this->EE->output->show_message(array(
+			'title' => $this->EE->lang->line('error'),
+			'heading' => $this->EE->lang->line('general_error'),
+			'content' => '<ul><li>'.lang('unencrypted_submissions_disabled').'</li></ul>',
+			'redirect' => '',
+			'link' => array($this->EE->functions->fetch_site_index(TRUE), $this->EE->lang->line('site_homepage'))
+		), 0);
 
-	/**
-	 * Make sure the URL has a domain section.
-	 */
-	private function _abs_url($url) {
-		# If $url starts with a '/'...
-		if ($url[0] == '/' && isset($_SERVER['HTTP_HOST'])) {
-			$url = 'http://'.$_SERVER['HTTP_HOST'].$url;
-		}
-
-		# And if we still do not have "http" protocol...
-		if (strncmp($url, 'http', 4) != 0) {
-			# CodeIgniter provides a way to retrieve the current URL.
-			$this->EE->load->helper('url');
-			$url = basename(current_url()).'/'.$url;
-		}
-
-		return $url;
+		$this->EE->extensions->end_script = TRUE;
+		return;
 	}
 
 	/**
@@ -207,17 +350,19 @@ class Force_ssl_ext {
 	}
 
 	/**
-	 * Test for a valid SSL certificate.
+	 * Test for a valid SSL certificate. Discard the contents of the page.
 	 */
 	private function _test_ssl() {
 		# Use curl to send the request
-		$ssl_url = $this->_ssl_url();
+		$ssl_url = forcessl_shared::ssl_url();
 		$c = curl_init();
 		curl_setopt($c, CURLOPT_URL, $ssl_url);
 		curl_setopt($c, CURLOPT_SSL_VERIFYPEER, true);
 		curl_setopt($c, CURLOPT_RETURNTRANSFER, 0);
 
+		ob_start();
 		$ret = curl_exec($c);
+		ob_clean();
 		if (!$ret) {
 			$trunc = strlen($ssl_url) > 80 ? substr($ssl_url, 0, 80).'...' : $ssl_url;
 			$ret  = 'URL: <a href="'.$ssl_url.'">'.$trunc.'</a><br />';
@@ -225,6 +370,60 @@ class Force_ssl_ext {
 		}
 
 		return $ret;
+	}
+
+	/**
+	 * Fold $arr into the official settings.
+	 */
+	private function _merge_settings($arr) {
+		if (is_array($arr)) {
+			foreach ($arr as $k => $v) {
+				if (isset($this->settings[$k])) {
+					if (is_array($v)) {
+						foreach ($v as $k2 => $v2) {
+							if (isset($this->settings[$k][$k2])) {
+								$this->settings[$k][$k2] = $v2;
+							}
+						}
+					} else {
+						$this->settings[$k] = $v;
+					}
+				}
+			}
+		}
+
+		forcessl_shared::merge_settings($this->settings);
+
+		return;
+	}
+
+	/**
+	 * Update class settings.
+	 */
+	private function _save_settings() {
+		$this->EE->db->where('class', __CLASS__);
+		$this->EE->db->update('extensions', array('settings' => serialize($this->settings)));
+
+		return;
+	}
+
+	/**
+	 * Load the class settings when EE does not want to pass them to us.
+	 */
+	private function _load_settings() {
+		$this->EE->db->select('settings');
+		//$this->EE->db->where('enabled', 'y');
+		$this->EE->db->where('class', __CLASS__);
+		$this->EE->db->limit(1);
+		$query = $this->EE->db->get('extensions');
+
+		if ($query->num_rows() > 0 && $query->row('settings')  != '') {
+			$this->EE->load->helper('string');
+			$settings = strip_slashes(unserialize($query->row('settings')));
+			$this->_merge_settings($settings);
+		}
+
+		return;
 	}
 
 	/**
@@ -236,10 +435,13 @@ class Force_ssl_ext {
 		$this->EE->load->library('table');
 		$this->EE->lang->loadfile('force_ssl');
 
+		# EE does not populate $this->settings for this call. Merging the settings arrays allows us to upgrade more easily.
+		$this->_merge_settings($current);
+
 		# Basic starter settings.
-		$active = $current['active'];
+		$active = $this->settings['active'];
 		$hsts_link = $this->EE->cp->masked_url('https://en.wikipedia.org/wiki/HTTP_Strict_Transport_Security%23Overview');
-		$valid_license = $this->_validate_license($current['license']);
+		$valid_license = $this->_validate_license($this->settings['license']);
 		$valid_ssl = true;
 		$settings = array();
 
@@ -251,7 +453,9 @@ class Force_ssl_ext {
 		}
 
 		# Is any warning in order?
-		if ($valid_ssl !== true) {
+		if ($this->EE->config->item('force_ssl_disabled')) {
+			$settings['note'] = '<span style="color: #090;">'.lang('force_ssl_disabled').'</span>';
+		} elseif ($valid_ssl !== true) {
 			# Detect the server OS and tailor the message warning appropriately.
 			$auto_os = 'unknown';
 			if (isset($_SERVER['SERVER_SOFTWARE'])) {
@@ -275,7 +479,7 @@ class Force_ssl_ext {
 
 			# Add the warning to the table data.
 			$settings['warning'] = lang('not_valid').'<br /><br />'.$valid_ssl.'<br /><br />'.$not_valid_end;
-		} elseif ($current['active'] < 0) {
+		} elseif ($this->settings['active'] < 0) {
 			# Notify the user that they must save the settings to activate automatic redirections.
 			$settings['note'] = '<span style="color: #090;">'.lang('save_me').'</span>';
 		}
@@ -283,7 +487,7 @@ class Force_ssl_ext {
 		# Settings.
 		$settings['license'] = form_input(array(
 			'name' => 'license', 
-			'value' => $current['license'],
+			'value' => $this->settings['license'],
 			'style' => 'border-color: #'.($valid_license ? '0b0' : 'c00').'; width: 75%;'
 		));
 		$settings['ssl_on'] = form_dropdown('ssl_on', array(
@@ -293,13 +497,20 @@ class Force_ssl_ext {
 			'logged_in' => lang('logged_in'),
 			'all' => lang('all'),
 			'hsts' => lang('hsts')
-		), $current['ssl_on']).' (<a href="'.$hsts_link.'">What is HSTS</a>?)';
+		), $this->settings['ssl_on']).' (<a href="'.$hsts_link.'">What is HSTS</a>?)';
 		$advanced['active'] = form_checkbox('active', 1, $active);
+		$advanced['deny_post'] = form_checkbox('deny_post', 1, $this->settings['deny_post']);
+		$advanced['tamper'] = form_dropdown('tamper', array(
+			'none' => lang('no'),
+			'auto' => lang('auto'),
+			'abs' => lang('abs')
+		), $this->settings['tamper']);
 		$advanced['port'] = form_input(array(
 			'name' => 'port',
-			'value' => $current['port'],
+			'value' => $this->settings['port'],
 			'style' => 'width: 4em;'
 		));
+		//$advanced['settings'] = '<pre>'.print_r($this->settings, true).'</pre>';
 
 		# Build the view.
 		return $this->EE->load->view('index', array('settings' => $settings, 'advanced' => $advanced), true);
@@ -314,16 +525,36 @@ class Force_ssl_ext {
 		}
 		unset($_POST['submit']);
 
+		# Use the standard HTTPS port if non was specified.
+		if (!isset($_POST['port']) || empty($_POST['port'])) {
+			$_POST['port'] = 443;
+		}
+
 		# HSTS can only be enabled when we are using port 443. Fall back to manual redirects.
 		if (isset($_POST['port']) && isset($_POST['ssl_on']) && ($_POST['port'] != 443) && ($_POST['ssl_on'] == 'hsts')) {
 			$_POST['ssl_on'] = 'all';
 		}
+
+		# Ensure we have a value for each checkbox.
 		$_POST['active'] = isset($_POST['active']) && $_POST['active'] ? 1 : 0;
+		$_POST['deny_post'] = isset($_POST['deny_post']) && $_POST['deny_post'] ? 1 : 0;
 
 		# Update our settings.
-		$this->EE->db->where('class', __CLASS__);
-		$this->EE->db->update('extensions', array('settings' => serialize($_POST)));
+		$this->_load_settings();
+		$this->_merge_settings($_POST);
+		$this->_save_settings();
 
+		# Restore existing site settings so we can be sure they are updated correctly with the next function call.
+		foreach ($this->settings['backup'] as $k => $v) {
+			if (!empty($v)) {
+				$this->EE->config->set_item($k, $v);
+			}
+		}
+
+		# Update any necessary EE settings.
+		$this->_update_site_prefs();
+
+		# Notify the user that the settings were updated.
 		$this->EE->session->set_flashdata('message_success', $this->EE->lang->line('preferences_updated'));
 
 		return;
@@ -333,10 +564,15 @@ class Force_ssl_ext {
 	 * Required install function...
 	 */
 	function activate_extension() {
+		# Detect any existing settings (ie. for upgrades).
+		$this->_load_settings();
+
 		# Prepare to dump data into the database.
 		$hooks = array(
 			'sessions_end' => 'on_page_load',
-			'form_declaration_modify_data' => 'form_declaration'
+			'form_declaration_modify_data' => 'form_declaration',
+			'freeform_module_form_end' => 'freeform_declaration',
+			'cp_js_end' => 'cp_orig_config'
 		);
 		$data = array(
 			'class' => __CLASS__,
@@ -350,7 +586,25 @@ class Force_ssl_ext {
 		foreach ($hooks as $hook => $func) {
 			$data['hook'] = $hook;
 			$data['method'] = $func;
-			$this->EE->db->insert('extensions', $data);
+
+			# Check whether we are already in the database.
+			$this->EE->db->select('extension_id');
+			$this->EE->db->where('enabled', 'y');
+			$this->EE->db->where('hook', $hook);
+			$this->EE->db->where('class', __CLASS__);
+			$this->EE->db->limit(1);
+			$query = $this->EE->db->get('extensions');
+
+			# Insert this hook.
+			if (!$query->num_rows()) {
+				$this->EE->db->insert('extensions', $data);
+
+			# Update an existing hook.
+			} else {
+				$this->EE->db->where('hook', $hook);
+				$this->EE->db->where('class', __CLASS__);
+				$this->EE->db->update('extensions', $data);
+			}
 		}
 
 		return;
@@ -360,6 +614,8 @@ class Force_ssl_ext {
 	 * And Update...
 	 */
 	function update_extension($current = '') {
+		$this->activate_extension();
+
 		return;
 	}
 
@@ -367,6 +623,14 @@ class Force_ssl_ext {
 	 * And... who would want to uninstall a nice extension like us?
 	 */
 	function disable_extension() {
+		# Load our settings.
+		$this->_load_settings();
+
+		# Restore any settings we tampered with.
+		$this->settings['tamper'] = 'none';
+		$this->_update_site_prefs();
+
+		# Delete our hooks.
 		$this->EE->db->where('class', __CLASS__);
 		$this->EE->db->delete('extensions');
 	}

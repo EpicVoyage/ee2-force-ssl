@@ -9,30 +9,29 @@
  * @link		https://www.epicvoyage.org/ee/force-ssl/
  */
 
+require_once(dirname(__FILE__).'/forcessl_shared.class.php');
 $plugin_info = array(
-	'pi_name' => 'Force SSL',
-	'pi_version' => '1.1',
+	'pi_name' => forcessl_shared::$name,
+	'pi_version' => forcessl_shared::$version,
 	'pi_author' => 'EpicVoyage',
-	'pi_author_url' => 'https://www.epicvoyage.org/ee/force-ssl',
-	'pi_description' => 'Force HTTPS (HTTP + SSL) connections via {exp:force_ssl}',
+	'pi_author_url' => forcessl_shared::$home,
+	'pi_description' => forcessl_shared::$description,
 	'pi_usage' => Force_ssl::usage()
 );
 
 class Force_ssl {
 	var $return_data = '';
-	var $settings = array(
-		'port' => 443
-	);
 
 	/**
-	 * Invoking the class name is sufficient cause to redirect.
+	 * Instantiate the plugin...
 	 */
 	function __construct() {
 		$this->EE =& get_instance();
+		forcessl_shared::load_settings();
 
-		$this->_load_settings();
-		if (!$this->_is_ssl()) {
-			$this->EE->functions->redirect($this->_ssl_url());
+		# If no plugin function is called and we are not on SSL, it is time to redirect...
+		if (preg_match('/^\{exp:force_ssl(\s|\})/', $this->EE->TMPL->tagproper) && !forcessl_shared::disabled() && !forcessl_shared::is_ssl()) {
+			$this->EE->functions->redirect(forcessl_shared::ssl_url());
 		}
 
 		return;
@@ -43,65 +42,64 @@ class Force_ssl {
 	}
 
 	/**
+	 * If we are on an SSL connection, switch to HTTP.
+	 */
+	public function restore() {
+		if (!forcessl_shared::disabled() && forcessl_shared::is_ssl()) {
+			$this->EE->functions->redirect(forcessl_shared::normal_url());
+		}
+	}
+
+	/**
+	 * Rewrite "http://" to "https://", and vice versa.
+	 */
+	public function rewrite() {
+		$find = 'http://';
+		$replace = 'https://';
+
+		if (!forcessl_shared::is_ssl()) {
+			$this->_swap($find, $replace);
+		}
+
+		return str_replace($find, $replace, $this->EE->TMPL->tagdata);
+	}
+
+	/**
+	 * Output "https" or "http" depending on our SSL status.
+	 */
+	public function proto() {
+		return forcessl_shared::is_ssl() ? 'https' : 'http';
+	}
+
+	/**
 	 * Explain the simple usage of this plugin.
 	 */
 	public static function usage() {
 		return <<<EOF
-Redirect non-SSL traffic to this page over to HTTPS:
+Redirect non-SSL visitors over to HTTPS:
 
 {exp:force_ssl}
+
+Redirect SSL visitors over to HTTP:
+
+{exp:force_ssl:restore}
+
+Two methods are provided to rewrite URL schemes based on the page's current encryption status:
+
+{exp:force_ssl:rewrite}
+<script type="text/javascript" src="http://ajax.googleapis.com/ajax/libs/jquery/1.7.2/jquery.min.js"></script>
+{/exp:force_ssl:rewrite}
+
+And:
+
+<script type="text/javascript" src="{exp:force_ssl:proto}://ajax.googleapis.com/ajax/libs/jquery/1.7.2/jquery.min.js"></script>
 EOF;
 	}
 
-	/**
-	 * Duplicates from ext.hsts.php. Update there and copy over. Maybe one day we will set up a code share...
-	 */
-	private function _is_ssl() {
-		$ret = false;
-
-		# The "Standard" PHP way...
-		if (isset($_SERVER['HTTPS']) && !empty($_SERVER['HTTPS']) && ($_SERVER['HTTPS'] !== 'off')) {
-			$ret = true;
-		# If mod_ssl is not present, we have to rely on port numbers to know if we are encrypted or not.
-		} elseif (isset($_SERVER['SERVER_PORT']) && isset($this->settings['port']) && (intval($_SERVER['SERVER_PORT']) == intval($this->settings['port']))) {
-			$ret = true;
-		}
-
-		return $ret;
-	}
-
-	private function _ssl_url() {
-		# CodeIgniter provides a way to retrieve the current URL.
-		$this->EE->load->helper('url');
-		$ci = current_url();
-
-		$port = $this->settings['port'] == '443' ? '' : ':443';
-		$ret = $ci = preg_replace('#^https?://([^/:]+)(?::[^/]+)?/#i', 'https://$1'.$port.'/', $ci);
-
-		# HTTP_HOST + REQUEST_URI is more accurate.
-		if (isset($_SERVER['HTTP_HOST']) && isset($_SERVER['REQUEST_URI'])) {
-			$ret = $php = 'https://'.$_SERVER['HTTP_HOST'].$port.$_SERVER['REQUEST_URI'];
-
-			# ... but if it significantly differs, follow CI.
-			if (strncmp($ci, $php, strlen($ci)) != 0) {
-				$ret = $ci;
-			}
-		}
-
-		return $ret;
-	}
-
-	private function _load_settings() {
-		$this->EE->db->select('settings');
-		$this->EE->db->where('enabled', 'y');
-		$this->EE->db->where('class', __CLASS__.'_ext');
-		$this->EE->db->limit(1);
-		$query = $this->EE->db->get('extensions');
-		
-		if ($query->num_rows() > 0 && $query->row('settings')  != '') {
-			$this->EE->load->helper('string');
-			$this->settings = strip_slashes(unserialize($query->row('settings')));
-		}
+	private function _swap(&$first, &$second) {
+		$temp = $first;
+		$first = $second;
+		$second = $temp;
 
 		return;
 	}

@@ -26,7 +26,14 @@ $lang['hide_advanced_preferences'] = 'Hide Advanced Preferences';
 $lang['warning'] = 'WARNING';
 $lang['note'] = 'NOTE';
 $lang['active'] = 'Active';
-$lang['port'] = 'HTTPS port (if you do not know what this is, it should be "443")';
+$lang['deny_post'] = 'Deny unencrypted &lt;form&gt; submissions<br /><em>Please verify all site functionality if you enable this.</em>';
+$lang['tamper'] = 'Tamper with Theme and CP URLs, if required';
+$lang['auto'] = 'Automatic (better for caching)';
+$lang['abs'] = 'Absolute URLs (older browser support)';
+$lang['port'] = 'HTTPS port<br /><em>if you do not know what this is, it should be "443"</em>';
+
+$lang['unencrypted_submissions_disabled'] = 'We are sorry but for security reasons we cannot allow this action to proceed. Please contact your system administrator.';
+$lang['force_ssl_disabled'] = 'This module has been disabled in your config.php file. Please look for "force_ssl_disabled."';
 
 /* End of file force_ssl_lang.php */
 /* Location: ./system/expressionengine/third_party/force_ssl/language/english/force_ssl_lang.php */
