@@ -52,12 +52,15 @@ class Force_ssl {
 
 	/**
 	 * Rewrite "http://" to "https://", and vice versa.
+	 *
+	 * ssl=	yes, no
 	 */
 	public function rewrite() {
+		$ssl = $this->EE->TMPL->fetch_param('ssl');
 		$find = 'http://';
 		$replace = 'https://';
 
-		if (!forcessl_shared::is_ssl()) {
+		if ((!$ssl && !forcessl_shared::is_ssl()) || ($ssl == 'no')) {
 			$this->_swap($find, $replace);
 		}
 

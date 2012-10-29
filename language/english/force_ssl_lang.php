@@ -25,6 +25,7 @@ $lang['show_advanced_preferences'] = 'Show Advanced Preferences';
 $lang['hide_advanced_preferences'] = 'Hide Advanced Preferences';
 $lang['warning'] = 'WARNING';
 $lang['note'] = 'NOTE';
+$lang['force_template_groups'] = 'Force SSL for these Template Groups';
 $lang['active'] = 'Active';
 $lang['deny_post'] = 'Deny unencrypted &lt;form&gt; submissions<br /><em>Please verify all site functionality if you enable this.</em>';
 $lang['tamper'] = 'Tamper with Theme and CP URLs, if required';

@@ -15,6 +15,21 @@ $this->table->add_row('', '<a href="#" onclick="return fs_advanced_toggle(this);
 
 echo $this->table->generate();
 ?>
+<div id="template_groups">
+<?php
+$this->table->set_template($cp_pad_table_template);
+$this->table->set_heading(
+	array('data' => lang('force_template_groups'), 'style' => 'width:50%;'),
+	lang('setting')
+);
+
+foreach ($template_groups as $key => $val) {
+	$this->table->add_row($key, $val);
+}
+
+echo $this->table->generate();
+?>
+</div>
 <div id="advanced" style="display: none;">
 <?php
 $this->table->set_template($cp_pad_table_template);

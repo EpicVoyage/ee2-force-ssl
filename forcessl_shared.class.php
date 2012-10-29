@@ -2,7 +2,7 @@
 
 class forcessl_shared {
 	public static $name = 'Force SSL';
-	public static $version = 1.2;
+	public static $version = 1.3;
 	public static $description = 'Force HTTPS (HTTP + SSL) connections at your preference.';
 	public static $home = 'https://www.epicvoyage.org/ee/force-ssl';
 

@@ -25,7 +25,8 @@ class Force_ssl_ext {
 		'tamper' => 'abs', // 'none', 'auto', 'abs'
 		'deny_post' => 0,
 		'license' => '',
-		'backup' => array(
+		'template_groups' => array(
+		), 'backup' => array(
 			'theme_folder_url' => '',
 			'site_url' => '',
 			'cp_url' => ''
@@ -125,6 +126,7 @@ class Force_ssl_ext {
 
 			# Then go SSL!
 			if ($encrypt) {
+				$this->EE->session = &$sess;
 				$this->EE->functions->redirect(forcessl_shared::ssl_url());
 			}
 		}
@@ -175,6 +177,27 @@ class Force_ssl_ext {
 	}
 
 	/**
+	 * Force SSL only on select template groups.
+	 */
+	public function template_fetch_template($row) {
+		if ($this->EE->session->cache(__CLASS__, 'embed')) {
+			# We are working on an embedded template. Ignore.
+		} elseif (forcessl_shared::is_ssl()) {
+			if (!empty($this->settings['template_groups']) && !in_array($row['group_id'], $this->settings['template_groups'])) {
+				$this->EE->functions->redirect(forcessl_shared::normal_url());
+			}
+		} else {
+			if (in_array($row['group_id'], $this->settings['template_groups'])) {
+				$this->EE->functions->redirect(forcessl_shared::ssl_url());
+			}
+		}
+
+		$this->EE->session->set_cache(__CLASS__, 'embed', 1);
+
+		return $row;
+	}
+
+	/**
 	 * We have less control over Freeform, but that is alright.
 	 */
 	public function freeform_declaration($data) {
@@ -207,6 +230,9 @@ class Force_ssl_ext {
 	 */
 	public function cp_orig_config() {
 		$ret = '';
+		if ($this->EE->extensions->last_call !== FALSE) {
+			$ret = $this->EE->extensions->last_call;
+		}
 
 		foreach ($this->settings['backup'] as $k => $v) {
 			if (!empty($v)) {
@@ -353,23 +379,36 @@ class Force_ssl_ext {
 	 * Test for a valid SSL certificate. Discard the contents of the page.
 	 */
 	private function _test_ssl() {
-		# Use curl to send the request
 		$ssl_url = forcessl_shared::ssl_url();
-		$c = curl_init();
-		curl_setopt($c, CURLOPT_URL, $ssl_url);
-		curl_setopt($c, CURLOPT_SSL_VERIFYPEER, true);
-		curl_setopt($c, CURLOPT_RETURNTRANSFER, 0);
 
-		ob_start();
-		$ret = curl_exec($c);
-		ob_clean();
-		if (!$ret) {
-			$trunc = strlen($ssl_url) > 80 ? substr($ssl_url, 0, 80).'...' : $ssl_url;
-			$ret  = 'URL: <a href="'.$ssl_url.'">'.$trunc.'</a><br />';
-			$ret .= 'Error: <span style="color: #c00;">'.htmlentities(curl_error($c)).'</span>';
+		if (function_exists('curl_init')) {
+			# Use curl to send the request
+			$c = curl_init();
+			curl_setopt($c, CURLOPT_URL, $ssl_url);
+			curl_setopt($c, CURLOPT_SSL_VERIFYPEER, true);
+			curl_setopt($c, CURLOPT_RETURNTRANSFER, 0);
+
+			ob_start();
+			$ret = curl_exec($c);
+			ob_clean();
+			if (!$ret) {
+				$ret  = 'URL: <a href="'.htmlentities($ssl_url).'">'.htmlentities($this->_trunc($ssl_url)).'</a><br />';
+				$ret .= 'Error: <span style="color: #c00;">'.htmlentities(curl_error($c)).'</span>';
+			}
+		} else {
+			$ret .= 'Warning: libcurl is not installed or enabled. You should verify that you can access the website over HTTPS before enabling this extension.<br />';
+			$ret .= 'URL: <a href="'.htmlentities($ssl_url).'">'.htmlentities($this->_trunc($ssl_url)).'</a>';
 		}
 
 		return $ret;
+	}
+
+	private function _trunc($str, $len = 80, $ending = '...') {
+		if (strlen($str) > $len) {
+			$str = rtrim(substr($str, 0, $len)).$ending;
+		}
+
+		return $str;
 	}
 
 	/**
@@ -390,6 +429,11 @@ class Force_ssl_ext {
 					}
 				}
 			}
+		}
+
+		# Enable whole-sale replacement of the 'template_groups' setting.
+		if (isset($arr['template_groups'])) {
+			$this->settings['template_groups'] = $arr['template_groups'];
 		}
 
 		forcessl_shared::merge_settings($this->settings);
@@ -444,6 +488,17 @@ class Force_ssl_ext {
 		$valid_license = $this->_validate_license($this->settings['license']);
 		$valid_ssl = true;
 		$settings = array();
+
+		# Template groups to force/ignore.
+		$this->EE->db->order_by('group_name');
+		$query = $this->EE->db->get('template_groups');
+		$template_groups = array();
+
+		if ($query->num_rows()) {
+			foreach ($query->result_array() as $row) {
+				$template_groups[$row['group_name']] = form_checkbox('template_groups[]', $row['group_id'], in_array($row['group_id'], $this->settings['template_groups']));
+			}
+		}
 
 		# Lets attempt to notify the admin if anything is wrong with the SSL install. This test
 		# will disappear when the plugin is "active."
@@ -513,7 +568,7 @@ class Force_ssl_ext {
 		//$advanced['settings'] = '<pre>'.print_r($this->settings, true).'</pre>';
 
 		# Build the view.
-		return $this->EE->load->view('index', array('settings' => $settings, 'advanced' => $advanced), true);
+		return $this->EE->load->view('index', array('settings' => $settings, 'template_groups' => $template_groups, 'advanced' => $advanced), true);
 	}
 
 	/**
@@ -533,6 +588,11 @@ class Force_ssl_ext {
 		# HSTS can only be enabled when we are using port 443. Fall back to manual redirects.
 		if (isset($_POST['port']) && isset($_POST['ssl_on']) && ($_POST['port'] != 443) && ($_POST['ssl_on'] == 'hsts')) {
 			$_POST['ssl_on'] = 'all';
+		}
+
+		# Don't lose the template_groups checkbox settings when none are selected.
+		if (!isset($_POST['template_groups']) || !is_array($_POST['template_groups'])) {
+			$_POST['template_groups'] = array();
 		}
 
 		# Ensure we have a value for each checkbox.
@@ -572,6 +632,7 @@ class Force_ssl_ext {
 			'sessions_end' => 'on_page_load',
 			'form_declaration_modify_data' => 'form_declaration',
 			'freeform_module_form_end' => 'freeform_declaration',
+			'template_fetch_template' => 'template_fetch_template',
 			'cp_js_end' => 'cp_orig_config'
 		);
 		$data = array(
