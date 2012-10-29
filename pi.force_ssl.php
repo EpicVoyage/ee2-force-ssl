@@ -11,7 +11,7 @@
 
 $plugin_info = array(
 	'pi_name' => 'Force SSL',
-	'pi_version' => '1.0',
+	'pi_version' => '1.1',
 	'pi_author' => 'EpicVoyage',
 	'pi_author_url' => 'https://www.epicvoyage.org/ee/force-ssl',
 	'pi_description' => 'Force HTTPS (HTTP + SSL) connections via {exp:force_ssl}',

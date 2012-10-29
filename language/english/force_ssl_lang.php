@@ -4,6 +4,7 @@ $lang['license'] = 'License Key';
 $lang['ssl_on'] = 'Automatically Force SSL for';
 $lang['none'] = 'Nothing';
 $lang['login'] = 'Form Submissions';
+$lang['cp'] = 'Control Panel';
 $lang['logged_in'] = 'Authenticated Users';
 $lang['all'] = 'All Pages';
 $lang['hsts'] = 'HSTS Mode';

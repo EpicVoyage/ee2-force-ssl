@@ -12,12 +12,12 @@
 
 class Force_ssl_ext {
 	var $name = 'Force SSL';
-	var $version = '1.0';
+	var $version = '1.1';
 	var $descriptions = 'Force HTTPS (HTTP + SSL) connections at your preference.';
 	var $settings_exist = 'y';
 	var $docs_url = 'https://www.epicvoyage.org/ee/force-ssl';
 	var $settings = array(
-		'ssl_on' => 'none', // 'none', 'login', 'logged_in', 'all', 'hsts'
+		'ssl_on' => 'none', // 'none', 'login', 'logged_in', 'cp', 'all', 'hsts'
 		'port' => 443,
 		'active' => -1,
 		'license' => ''
@@ -87,6 +87,8 @@ class Force_ssl_ext {
 			$encrypt = $hsts || ($this->settings['ssl_on'] == 'all');
 			if ($this->settings['ssl_on'] == 'logged_in') {
 				$encrypt = (isset($sess->userdata['member_id']) && $sess->userdata['member_id']);
+			} elseif ($this->settings['ssl_on'] == 'cp') {
+				$encrypt = defined('REQ') && (constant('REQ') === 'CP');
 			}
 
 			if ($encrypt) {
@@ -287,6 +289,7 @@ class Force_ssl_ext {
 		$settings['ssl_on'] = form_dropdown('ssl_on', array(
 			'none' => lang('none'),
 			'login' => lang('login'),
+			'cp' => lang('cp'),
 			'logged_in' => lang('logged_in'),
 			'all' => lang('all'),
 			'hsts' => lang('hsts')
