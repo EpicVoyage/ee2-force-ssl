@@ -74,6 +74,24 @@ class Force_ssl {
 		return forcessl_shared::is_ssl() ? 'https' : 'http';
 	}
 
+	public function debug() {
+		$this->EE->load->helper('url');
+		$nl = "<br />\n";
+
+		$ret  = '<div class="debug">';
+		$ret .= 'Enabled?: '.(!forcessl_shared::disabled() ? 'yes' : 'no').$nl;
+		$ret .= 'Is SSL?: '.(forcessl_shared::is_ssl() ? 'yes' : 'no').$nl;
+		$ret .= 'CI current_url(): '.current_url().$nl;
+		if (isset($_SERVER['HTTP_HOST']) && isset($_SERVER['REQUEST_URI'])) {
+			$ret .= 'Detected Current URL:'.$_SERVER['HTTP_HOST'].$_SERVER['REQUEST_URI'].$nl;
+		}
+		$ret .= 'SSL URL: '.forcessl_shared::ssl_url().$nl;
+		$ret .= 'Normal URL: '.forcessl_shared::normal_url().$nl;
+		$ret .= '</div>';
+
+		return $ret;
+	}
+
 	/**
 	 * Explain the simple usage of this plugin.
 	 */
