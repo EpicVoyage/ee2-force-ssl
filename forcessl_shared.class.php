@@ -57,9 +57,9 @@ class forcessl_shared {
 			$ret = $php = 'https://'.$_SERVER['HTTP_HOST'].$port.$_SERVER['REQUEST_URI'];
 
 			# ... but if it significantly differs, follow CI.
-			if (strncmp($base, $php, strlen($base)) != 0) {
-				$ret = $base;
-			}
+			//if ((strlen($base) > 1) && (strncmp($base, $php, strlen($base)) != 0)) {
+			//	$ret = $base;
+			//}
 		}
 
 		return $ret;
@@ -80,9 +80,9 @@ class forcessl_shared {
 			$ret = $php = 'http://'.$_SERVER['HTTP_HOST'].$_SERVER['REQUEST_URI'];
 
 			# ... but if it significantly differs, follow CI.
-			if (strncmp($base, $php, strlen($base)) != 0) {
-				$ret = $base;
-			}
+			//if ((strlen($base) > 1) && (strncmp($base, $php, strlen($base)) != 0)) {
+			//	$ret = $base;
+			//}
 		}
 
 		return $ret;
@@ -133,7 +133,7 @@ class forcessl_shared {
 			$url = 'http:'.$url;
 		
 		# If $url starts with a '/'...
-		} elseif (($url[0] == '/') && ($url[1] != '/') && isset($_SERVER['HTTP_HOST'])) {
+		} elseif ((empty($url) || (($url[0] == '/') && ($url[1] != '/'))) && isset($_SERVER['HTTP_HOST'])) {
 			$url = 'http://'.$_SERVER['HTTP_HOST'].$url;
 		}
 
