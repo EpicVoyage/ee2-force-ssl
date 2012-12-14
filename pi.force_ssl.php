@@ -60,6 +60,27 @@ class Force_ssl {
 		$find = 'http://';
 		$replace = 'https://';
 
+		# Replace the global variables for stylesheets now.
+		# Note: We parse very similarly to the Template parser, but pass off to it since there is a lot
+		# of logic, and it may change.
+		if (strpos($this->EE->TMPL->tagdata, 'stylesheet=') !== false) {
+			if (preg_match_all("/(".LD."\s*stylesheet=[\042\047]?.*?[\042\047]?".RD.")/", $this->EE->TMPL->tagdata, $css_matches)) {
+				$replacements = array();
+				foreach ($css_matches[1] as $k => $css_match) {
+					$replacements[$k] = $this->EE->TMPL->parse_globals($css_match);
+				}
+
+				$this->EE->TMPL->tagdata = str_replace($css_matches[1], $replacements, $this->EE->TMPL->tagdata);
+			}
+		}
+
+		# Replace {path=} now, due to their use sometimes for JavaScript files.
+		# Note: This is the code used by the Template parser.
+		if (strpos($this->EE->TMPL->tagdata, 'path=') !== FALSE) {
+			$this->EE->TMPL->tagdata = preg_replace_callback("/".LD."\s*path=(.*?)".RD."/", array(&$this->EE->functions, 'create_url'), $this->EE->TMPL->tagdata);
+		}
+
+		# Decide whether we should be replacing "http://" or "https://"
 		if ((!$ssl && !forcessl_shared::is_ssl()) || ($ssl == 'no')) {
 			$this->_swap($find, $replace);
 		}
